@@ -80,7 +80,8 @@ def generate_pdf_report(pdf_path, start_time, total_checks, duration_minutes, fo
     elements.append(Spacer(1, 12))
 
     elements.append(Paragraph("Timeline Visualization:", styles['Heading2']))
-    elements.append(RLImage(timeline_img_path, width=500, height=50))
+    if os.path.exists(timeline_img_path):
+        elements.append(RLImage(timeline_img_path, width=500, height=50))
 
     doc.build(elements)
 
@@ -89,6 +90,9 @@ while True:
     ret, frame = cap.read()
     if not ret:
         break
+
+    # --- FIX: Flip the frame horizontally ---
+    frame = cv2.flip(frame, 1)
 
     frame = cv2.resize(frame, (WINDOW_WIDTH, WINDOW_HEIGHT))
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -139,7 +143,7 @@ while True:
             append_timeline("red", CHECK_INTERVAL)
 
     cv2.imshow("Proctoring", frame)
-    if cv2.waitKey(1) & 0xFF == ord("q"):
+    if cv2.waitKey(1) & 0xFF == ord('q'):
         metrics["timestamps"].append(f"{datetime.datetime.now().strftime('%H:%M:%S')} - Test Ended")
         break
 
@@ -149,14 +153,14 @@ cv2.destroyAllWindows()
 # --- Metrics ---
 total_time = time.time() - start_time
 green_time = sum(d for color, d in timeline if color == "green")
-focus_retention = (green_time / total_time) * 100
+focus_retention = (green_time / total_time) * 100 if total_time > 0 else 0
 duration_minutes = total_time / 60
 
 # --- Timeline Plot ---
 fig, ax = plt.subplots(figsize=(10, 1))
 start_pos = 0
 for color, duration in timeline:
-    ax.barh(0, duration, left=start_pos, color=color)
+    ax.barh(0, duration, left=start_pos, color=color, edgecolor='none')
     start_pos += duration
 ax.set_xlim(0, total_time)
 ax.set_yticks([])
@@ -166,9 +170,10 @@ plt.savefig(timeline_img_path, bbox_inches='tight')
 plt.close()
 
 # --- Generate PDF ---
-pdf_path = "Proctoring_Report.pdf"
+pdf_path = "Proctoring_Report_read4.pdf"
 generate_pdf_report(pdf_path, start_time, total_checks, duration_minutes, focus_retention, metrics, timeline_img_path)
-os.remove(timeline_img_path)
+if os.path.exists(timeline_img_path):
+    os.remove(timeline_img_path)
 
 print(f"\nReport saved as {pdf_path}")
 print("--- Test Metrics ---")

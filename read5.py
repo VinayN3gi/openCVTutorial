@@ -1,7 +1,6 @@
 import cv2
 import mediapipe as mp
 import time
-import datetime
 import matplotlib.pyplot as plt
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet
@@ -10,7 +9,6 @@ import os
 
 
 # SETTINGS
-CHECK_INTERVAL = 1  # seconds
 GRACE_PERIOD = 2    # seconds before marking violation
 WINDOW_WIDTH = 900
 WINDOW_HEIGHT = 700
@@ -49,7 +47,7 @@ def draw_eye_boxes(frame, landmarks):
 
 # --- Function to generate PDF report ---
 def generate_pdf_report(stats, violations):
-    report_path = "violation_report.pdf"
+    report_path = "violation_report_read5.pdf" # Renamed to avoid overwriting other reports
     doc = SimpleDocTemplate(report_path, pagesize=A4)
     styles = getSampleStyleSheet()
     elements = []
@@ -61,27 +59,30 @@ def generate_pdf_report(stats, violations):
     elements.append(Paragraph(f"Total Violations: {stats['violations']}", styles['Normal']))
     elements.append(Spacer(1, 12))
 
-    # Create timeline plot
-    times = [v[0] for v in violations]
-    values = [1] * len(times)
+    if violations:
+        # Create timeline plot
+        times = [v[0] for v in violations]
+        values = [1] * len(times)
 
-    plt.figure(figsize=(6, 1))
-    plt.scatter(times, values, c='red')
-    plt.yticks([])
-    plt.xlabel("Time (s)")
-    plt.title("Violation Timeline")
-    timeline_img_path = "timeline.png"
-    plt.savefig(timeline_img_path)
-    plt.close()
+        plt.figure(figsize=(6, 1))
+        plt.scatter(times, values, c='red')
+        plt.yticks([])
+        plt.xlabel("Time (s)")
+        plt.title("Violation Timeline")
+        timeline_img_path = "timeline.png"
+        plt.savefig(timeline_img_path)
+        plt.close()
 
-    elements.append(Paragraph("Violation Timeline:", styles['Heading2']))
-    elements.append(RLImage(timeline_img_path, width=400, height=100))
+        elements.append(Paragraph("Violation Timeline:", styles['Heading2']))
+        elements.append(RLImage(timeline_img_path, width=400, height=100))
+        doc.build(elements)
 
-    doc.build(elements)
+        if os.path.exists(timeline_img_path):
+            os.remove(timeline_img_path)
+    else:
+        elements.append(Paragraph("No violations were recorded.", styles['Normal']))
+        doc.build(elements)
 
-    # Delete temp plot file if exists
-    if os.path.exists(timeline_img_path):
-        os.remove(timeline_img_path)
 
     print(f"[INFO] PDF report generated: {report_path}")
 
@@ -91,35 +92,52 @@ cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, WINDOW_WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, WINDOW_HEIGHT)
 
-last_check = time.time()
 looking_away_start = None
+status_text = "OK"
 
 while True:
     ret, frame = cap.read()
     if not ret:
         break
 
+    # --- FIX: Flip the frame horizontally ---
+    frame = cv2.flip(frame, 1)
+
     stats["total_frames"] += 1
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_mesh.process(rgb_frame)
 
+    # --- REVISED VIOLATION LOGIC ---
+    is_looking_away = False
     if results.multi_face_landmarks:
         landmarks = results.multi_face_landmarks[0].landmark
-        draw_eye_boxes(frame, landmarks)  # Draw eye rectangles
+        draw_eye_boxes(frame, landmarks)
 
-        # Simple "looking away" check using nose position
         nose_x = landmarks[1].x
         if nose_x < 0.3 or nose_x > 0.7:
-            if looking_away_start is None:
-                looking_away_start = time.time()
-            elif time.time() - looking_away_start > GRACE_PERIOD:
-                stats["violations"] += 1
-                violations.append((time.time() - start_time, "Looking Away"))
-                looking_away_start = None
+            is_looking_away = True
+            status_text = "Looking Away"
         else:
+            status_text = "Centered"
+    else:
+        # Treat "no face" as a looking away event
+        is_looking_away = True
+        status_text = "No Face Detected"
+
+    # --- Timer and Violation Counter ---
+    if is_looking_away:
+        if looking_away_start is None:
+            looking_away_start = time.time()
+        elif time.time() - looking_away_start > GRACE_PERIOD:
+            stats["violations"] += 1
+            violations.append((time.time() - start_time, status_text))
             looking_away_start = None
     else:
         looking_away_start = None
+
+    # Display status on the frame
+    cv2.putText(frame, f"STATUS: {status_text}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+    cv2.putText(frame, f"Violations: {stats['violations']}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
     cv2.imshow("Eye Tracker", frame)
 
@@ -131,4 +149,4 @@ cap.release()
 cv2.destroyAllWindows()
 
 # Generate PDF report
-generate_pdf_report(stats, violations)
+generate_pdf_report(stats,(violations))
